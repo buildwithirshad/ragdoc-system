@@ -2,10 +2,10 @@ import pytest
 from unittest.mock import patch, MagicMock
 from app.chunker import chunk_text, extract_text_from_pdf
 from app.embedder import embed_text, _cache_key
+from app.s3 import upload_to_s3, file_exists_in_s3
 
 
-# ── Chunker Tests ─────────────────────────────────────────────────────────────
-
+# chunker test
 def test_chunk_text_basic():
     """A short text should produce exactly one chunk."""
     text = "This is a short sentence."
@@ -37,8 +37,7 @@ def test_chunk_text_empty():
     assert chunks == []
 
 
-# ── Embedder Tests ────────────────────────────────────────────────────────────
-
+# embedder tests
 def test_cache_key_consistent():
     """Same text should always produce the same cache key."""
     key1 = _cache_key("hello world")
@@ -99,3 +98,30 @@ def test_embed_text_calls_openai_on_cache_miss():
         assert mock_redis.setex.called
         # Correct embedding returned
         assert result == fake_embedding
+
+# S3 tests
+def test_file_exists_in_s3_returns_true():
+    """If S3 head_object succeeds, file exists."""
+    with patch("app.s3.s3_client") as mock_s3:
+        mock_s3.head_object.return_value = {}
+        result = file_exists_in_s3("test.pdf")
+        assert result is True
+
+
+def test_file_exists_in_s3_returns_false():
+    """If S3 head_object raises ClientError, file does not exist."""
+    from botocore.exceptions import ClientError
+    with patch("app.s3.s3_client") as mock_s3:
+        mock_s3.head_object.side_effect = ClientError(
+            {"Error": {"Code": "404", "Message": "Not Found"}}, "HeadObject"
+        )
+        result = file_exists_in_s3("test.pdf")
+        assert result is False
+
+
+def test_upload_to_s3_returns_correct_key():
+    """Upload should return the correct S3 key."""
+    with patch("app.s3.s3_client") as mock_s3:
+        mock_s3.upload_file.return_value = None
+        key = upload_to_s3("/tmp/test.pdf", "test.pdf")
+        assert key == "documents/test.pdf"
