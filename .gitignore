@@ -1,14 +1,8 @@
-# Python
 __pycache__/
 *.pyc
 *.pyo
 .pytest_cache/
 venv/
-
-# Uploads - temp files, no need to track
 uploads/
-
-# PDF files
 *.pdf
-
 .env
