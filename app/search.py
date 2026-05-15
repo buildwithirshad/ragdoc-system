@@ -16,24 +16,56 @@ def search_chunks(query: str, db: Session) -> list[dict]:
     embedding_str = f"[{','.join(str(x) for x in query_embedding)}]"
 
     sql = text("""
+        WITH vector_search AS (
+            SELECT
+                c.id,
+                ROW_NUMBER() OVER (
+                    ORDER BY c.embedding <=> :embedding ::vector
+                ) AS vector_rank
+            FROM chunks c
+            ORDER BY c.embedding <=> :embedding ::vector
+            LIMIT 20
+        ),
+        fts_search AS (
+            SELECT
+                c.id,
+                ROW_NUMBER() OVER (
+                    ORDER BY ts_rank(
+                        to_tsvector('english', c.content),
+                        plainto_tsquery('english', :query)
+                    ) DESC
+                ) AS fts_rank
+            FROM chunks c
+            WHERE to_tsvector('english', c.content)
+                @@ plainto_tsquery('english', :query)
+            LIMIT 20
+        ),
+        rrf AS (
+            SELECT
+                COALESCE(vs.id, fs.id) AS id,
+                COALESCE(1.0 / (60 + vs.vector_rank), 0) +
+                COALESCE(1.0 / (60 + fs.fts_rank), 0) AS rrf_score
+            FROM vector_search vs
+            FULL OUTER JOIN fts_search fs ON vs.id = fs.id
+        )
         SELECT
             c.id,
             c.content,
             c.page_number,
             c.token_count,
             d.filename,
-            1 - (c.embedding <=> :embedding ::vector) AS similarity
-        FROM chunks c
+            rrf.rrf_score
+        FROM rrf
+        JOIN chunks c ON c.id = rrf.id
         JOIN documents d ON d.id = c.document_id
-        WHERE 1 - (c.embedding <=> :embedding ::vector) >= :min_similarity
-        ORDER BY c.embedding <=> :embedding ::vector
+        ORDER BY rrf.rrf_score DESC
         LIMIT :top_k
-    """)
+     """)
 
     result = db.execute(sql, {
-        "embedding":     embedding_str,
-        "min_similarity": settings.MIN_SIMILARITY,
-        "top_k":         settings.TOP_K,
+        "embedding":  embedding_str,
+        "query":      query,
+        "top_k":      settings.TOP_K,
     })
 
     rows = result.fetchall()
@@ -43,7 +75,7 @@ def search_chunks(query: str, db: Session) -> list[dict]:
             "content":    row.content,
             "page_number": row.page_number,
             "filename":   row.filename,
-            "similarity": round(float(row.similarity), 4),
+            "rrf_score":  round(float(row.rrf_score), 4),
         }
         for row in rows
     ]

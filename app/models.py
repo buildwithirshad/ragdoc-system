@@ -13,6 +13,7 @@ class Document(Base):
     status     = Column(String, default="ready")
     page_count = Column(Integer)
     created_at = Column(DateTime, default=datetime.utcnow)
+    s3_key = Column(String, nullable=True)
 
 
 class Chunk(Base):

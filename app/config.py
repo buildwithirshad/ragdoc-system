@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     TOP_K: int = 5
     MIN_SIMILARITY: float = 0.3
     CACHE_TTL: int = 3600
+    S3_BUCKET: str = "rag-document-system-irshad"
 
     class Config:
         env_file = ".env"

@@ -1,3 +1,4 @@
+from app.s3 import upload_to_s3, file_exists_in_s3
 import os
 import shutil
 from uuid import UUID
@@ -22,33 +23,43 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 def health():
     return {"status": "ok"}
 
-
 @app.post("/upload")
 def upload_document(file: UploadFile = File(...), db: Session = Depends(get_db)):
-    """
-    Upload a PDF, chunk it, embed it, store in PostgreSQL.
-    """
     if not file.filename.endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are supported.")
 
-    # 1. Save file to disk temporarily
+    # 1. Check if already in S3
+    if file_exists_in_s3(file.filename):
+        existing = db.query(Document).filter(Document.filename == file.filename).first()
+        if existing:
+            return {
+                "message":     "Document already exists, skipping re-upload.",
+                "document_id": str(existing.id),
+                "filename":    existing.filename,
+                "page_count":  existing.page_count,
+            }
+
+    # 2. Save file temporarily
     file_path = os.path.join(UPLOAD_DIR, file.filename)
     with open(file_path, "wb") as f:
         shutil.copyfileobj(file.file, f)
 
     try:
-        # 2. Parse PDF into chunks
+        # 3. Upload to S3
+        s3_key = upload_to_s3(file_path, file.filename)
+
+        # 4. Parse PDF into chunks
         chunks, page_count = process_pdf(file_path)
 
-        # 3. Embed all chunks (with Redis caching)
+        # 5. Embed all chunks
         chunks = embed_chunks(chunks)
 
-        # 4. Save document record
-        document = Document(filename=file.filename, page_count=page_count)
+        # 6. Save document record
+        document = Document(filename=file.filename, page_count=page_count, s3_key=s3_key)
         db.add(document)
-        db.flush()  # get the document.id before committing
+        db.flush()
 
-        # 5. Save all chunks
+        # 7. Save all chunks
         for chunk in chunks:
             db.add(Chunk(
                 document_id=document.id,
@@ -66,6 +77,7 @@ def upload_document(file: UploadFile = File(...), db: Session = Depends(get_db))
             "filename":    file.filename,
             "page_count":  page_count,
             "chunks":      len(chunks),
+            "s3_key":      s3_key,
         }
 
     except Exception as e:
@@ -73,9 +85,9 @@ def upload_document(file: UploadFile = File(...), db: Session = Depends(get_db))
         raise HTTPException(status_code=500, detail=str(e))
 
     finally:
-        # Always clean up the temp file
         if os.path.exists(file_path):
             os.remove(file_path)
+
 
 
 @app.post("/ask")
